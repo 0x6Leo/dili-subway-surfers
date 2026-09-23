@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dili Subway Surfers 3D</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    #ui { position: absolute; top: 15px; left: 15px; color: #fff; text-shadow: 2px 2px 4px #000; z-index: 10; font-size: 20px; }
+    #board-active { display: none; color: #00f0ff; font-weight: bold; font-size: 16px; margin-top: 5px; }
+    #game-over { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.85); padding: 30px; border-radius: 12px; color: #fff; text-align: center; border: 2px solid #00f0ff; z-index: 20; }
+    button { background: #00f0ff; color: #000; border: none; padding: 10px 20px; font-size: 18px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 15px; }
+  </style>
+  <!-- Three.js Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- 3D Model Loader (GLTFLoader) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+
+  <!-- UI Score & Leaderboard -->
+  <div id="ui">
+    <div><b>Score:</b> <span id="score">0</span></div>
+    <div><b>$DLI Coins:</b> <span id="coins">0</span></div>
+    <div><b>High Score:</b> <span id="highscore">0</span></div>
+    <div id="board-active">🛹 Hoverboard Active!</div>
+  </div>
+
+  <!-- Game Over Screen -->
+  <div id="game-over">
+    <h1>Game Over!</h1>
+    <p>경찰 (Police) ও কুকুর তোমাকে ধরে ফেলেছে!</p>
+    <p>Final Score: <span id="final-score">0</span></p>
+    <button onclick="restartGame()">Play Again</button>
+  </div>
+
+  <script>
+    let scene, camera, renderer, player, police;
+    let lanes = [-3, 0, 3];
+    let currentLane = 1;
+    let isJumping = false, jumpVelocity = 0, gravity = -0.015;
+    let isDucking = false;
+    let score = 0, coins = 0, highscore = localStorage.getItem('dili_highscore') || 0;
+    let obstacles = [], coinObjects = [], magnets = [];
+    let speed = 0.4;
+    let isGameOver = false;
+    let hasMagnet = false;
+    let hasBoard = false;
+
+    document.getElementById('highscore').innerText = highscore;
+
+    function init() {
+      // Scene & Camera
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a0033);
+      scene.fog = new THREE.Fog(0x1a0033, 20, 100);
+
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 5, 10);
+      camera.lookAt(0, 2, 0);
+
+      // Lighting
+      const light = new THREE.DirectionalLight(0xffffff, 1.2);
+      light.position.set(0, 20, 10);
+      scene.add(light);
+      scene.add(new THREE.AmbientLight(0x888888));
+
+      // Tracks / Subway Road
+      const trackGeo = new THREE.PlaneGeometry(12, 1000);
+      const trackMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide });
+      const track = new THREE.Mesh(trackGeo, trackMat);
+      track.rotation.x = Math.PI / 2;
+      track.position.z = -450;
+      scene.add(track);
+
+      // Rails
+      for(let x of lanes) {
+        const railGeo = new THREE.BoxGeometry(0.2, 0.1, 1000);
+        const railMat = new THREE.MeshBasicMaterial({ color: 0x888888 });
+        const rail = new THREE.Mesh(railGeo, railMat);
+        rail.position.set(x, 0.05, -450);
+        scene.add(rail);
+      }
+
+      // Default Placeholder Player Container
+      player = new THREE.Group();
+      player.position.set(lanes[currentLane], 0, 0);
+      scene.add(player);
+
+      // 3D GLTF LOADER SETUP
+      const loader = new THREE.GLTFLoader();
+
+      // 1. DILI CHARACTER LOAD ('dili.glb')
+      loader.load('dili.glb', function (gltf) {
+        const diliModel = gltf.scene;
+        diliModel.scale.set(1, 1, 1); // সাইজ ছোট/বড় করতে মান কমাও বা বাড়াও (যেমন: 0.5, 0.5, 0.5)
+        diliModel.position.set(0, 0, 0);
+        player.add(diliModel);
+      }, undefined, function (error) {
+        console.log('dili.glb পাওয়া যায়নি, ব্যাকআপ ৩ডি ব্লক ব্যবহার করা হচ্ছে।');
+        const fallbackGeo = new THREE.CylinderGeometry(0.6, 0.6, 2, 16);
+        const fallbackMat = new THREE.MeshStandardMaterial({ color: 0x00f0ff });
+        const fallbackMesh = new THREE.Mesh(fallbackGeo, fallbackMat);
+        fallbackMesh.position.y = 1;
+        player.add(fallbackMesh);
+      });
+
+      // Default Placeholder Police Container
+      police = new THREE.Group();
+      police.position.set(lanes[currentLane], 0, 3);
+      scene.add(police);
+
+      // 2. POLICE HAMSTER LOAD ('police.glb')
+      loader.load('police.glb', function (gltf) {
+        const policeModel = gltf.scene;
+        policeModel.scale.set(1, 1, 1);
+        policeModel.position.set(0, 0, 0);
+        police.add(policeModel);
+      }, undefined, function (error) {
+        console.log('police.glb পাওয়া যায়নি, ব্যাকআপ ৩ডি ব্লক ব্যবহার করা হচ্ছে।');
+        const fallbackGeo = new THREE.BoxGeometry(1.2, 1.8, 1);
+        const fallbackMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
+        const fallbackMesh = new THREE.Mesh(fallbackGeo, fallbackMat);
+        fallbackMesh.position.y = 0.9;
+        police.add(fallbackMesh);
+      });
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      // Controls
+      window.addEventListener('keydown', handleInput);
+
+      // Spawning Intervals
+      setInterval(spawnObstacle, 1500);
+      setInterval(spawnCoins, 1000);
+      setInterval(spawnMagnet, 10000);
+
+      animate();
+    }
+
+    function handleInput(e) {
+      if (isGameOver) return;
+      if (e.key === 'ArrowLeft' && currentLane > 0) currentLane--;
+      if (e.key === 'ArrowRight' && currentLane < 2) currentLane++;
+      if (e.key === 'ArrowUp' && !isJumping) { isJumping = true; jumpVelocity = 0.35; }
+      if (e.key === 'ArrowDown' && !isDucking) {
+        isDucking = true;
+        player.scale.y = 0.5;
+        setTimeout(() => { player.scale.y = 1; isDucking = false; }, 800);
+      }
+      if (e.code === 'Space' && !hasBoard) { activateHoverboard(); }
+    }
+
+    function activateHoverboard() {
+      hasBoard = true;
+      document.getElementById('board-active').style.display = 'block';
+      setTimeout(() => {
+        hasBoard = false;
+        document.getElementById('board-active').style.display = 'none';
+      }, 8000);
+    }
+
+    function spawnObstacle() {
+      if (isGameOver) return;
+      const lane = lanes[Math.floor(Math.random() * 3)];
+      const isTrain = Math.random() > 0.5;
+
+      let geo = isTrain ? new THREE.BoxGeometry(2.5, 3.5, 12) : new THREE.BoxGeometry(2.5, 1.2, 0.5);
+      let mat = new THREE.MeshStandardMaterial({ color: isTrain ? 0xcc0000 : 0xffaa00 });
+      let obs = new THREE.Mesh(geo, mat);
+      obs.position.set(lane, isTrain ? 1.75 : 0.6, -80);
+      scene.add(obs);
+      obstacles.push(obs);
+    }
+
+    function spawnCoins() {
+      if (isGameOver) return;
+      const lane = lanes[Math.floor(Math.random() * 3)];
+      for (let i = 0; i < 5; i++) {
+        const coinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 16);
+        const coinMat = new THREE.MeshStandardMaterial({ color: 0x00aeff });
+        const coin = new THREE.Mesh(coinGeo, coinMat);
+        coin.rotation.x = Math.PI / 2;
+        coin.position.set(lane, 1, -60 - (i * 2));
+        scene.add(coin);
+        coinObjects.push(coin);
+      }
+    }
+
+    function spawnMagnet() {
+      if (isGameOver) return;
+      const lane = lanes[Math.floor(Math.random() * 3)];
+      const magGeo = new THREE.TorusGeometry(0.4, 0.15, 8, 16);
+      const magMat = new THREE.MeshStandardMaterial({ color: 0xff0055 });
+      const mag = new THREE.Mesh(magGeo, magMat);
+      mag.position.set(lane, 1, -70);
+      scene.add(mag);
+      magnets.push(mag);
+    }
+
+    function animate() {
+      if (isGameOver) return;
+      requestAnimationFrame(animate);
+
+      // Movement
+      player.position.x += (lanes[currentLane] - player.position.x) * 0.2;
+      police.position.x += (player.position.x - police.position.x) * 0.1;
+
+      // Jump Logic
+      if (isJumping) {
+        player.position.y += jumpVelocity;
+        jumpVelocity += gravity;
+        if (player.position.y <= 0) {
+          player.position.y = 0;
+          isJumping = false;
+        }
+      }
+
+      // Move Obstacles
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        let obs = obstacles[i];
+        obs.position.z += speed;
+
+        if (Math.abs(obs.position.z - player.position.z) < 1 && Math.abs(obs.position.x - player.position.x) < 1) {
+          if (player.position.y < obs.position.y + 0.8) {
+            if (hasBoard) {
+              hasBoard = false;
+              document.getElementById('board-active').style.display = 'none';
+              scene.remove(obs);
+              obstacles.splice(i, 1);
+              continue;
+            } else {
+              triggerGameOver();
+            }
+          }
+        }
+        if (obs.position.z > 10) { scene.remove(obs); obstacles.splice(i, 1); }
+      }
+
+      // Move Coins
+      for (let i = coinObjects.length - 1; i >= 0; i--) {
+        let coin = coinObjects[i];
+        coin.position.z += speed;
+        coin.rotation.z += 0.05;
+
+        if (hasMagnet && coin.position.z > -20 && coin.position.z < 5) {
+          coin.position.x += (player.position.x - coin.position.x) * 0.2;
+          coin.position.y += (player.position.y - coin.position.y) * 0.2;
+        }
+
+        if (Math.abs(coin.position.z - player.position.z) < 1 && Math.abs(coin.position.x - player.position.x) < 1) {
+          scene.remove(coin);
+          coinObjects.splice(i, 1);
+          coins++;
+          score += 10;
+          document.getElementById('coins').innerText = coins;
+        } else if (coin.position.z > 10) {
+          scene.remove(coin);
+          coinObjects.splice(i, 1);
+        }
+      }
+
+      // Move Magnets
+      for (let i = magnets.length - 1; i >= 0; i--) {
+        let mag = magnets[i];
+        mag.position.z += speed;
+        if (Math.abs(mag.position.z - player.position.z) < 1 && Math.abs(mag.position.x - player.position.x) < 1) {
+          scene.remove(mag);
+          magnets.splice(i, 1);
+          hasMagnet = true;
+          setTimeout(() => { hasMagnet = false; }, 8000);
+        }
+      }
+
+      score++;
+      document.getElementById('score').innerText = score;
+    }
+
+    function triggerGameOver() {
+      isGameOver = true;
+      if (score > highscore) {
+        highscore = score;
+        localStorage.setItem('dili_highscore', highscore);
+      }
+      document.getElementById('final-score').innerText = score;
+      document.getElementById('game-over').style.display = 'block';
+    }
+
+    function restartGame() {
+      location.reload();
+    }
+
+    init();
+  </script>
+</body>
+</html>
